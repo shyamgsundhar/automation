@@ -1,5 +1,3 @@
-import re
-
 from groq import Groq
 from openai import OpenAI
 
@@ -8,17 +6,14 @@ from .config import (
     NVIDIA_API_KEY,
     NVIDIA_BASE_URL,
     NVIDIA_MODEL,
-
     GROQ_PRIMARY_MODEL,
     GROQ_FALLBACK_MODELS,
-
     GROQ_MAX_TOKENS,
     NVIDIA_MAX_TOKENS,
-
     GROQ_TEMPERATURE,
     NVIDIA_TEMPERATURE,
-
     MAX_SUMMARY_CHARS,
+    AI_TIMEOUT,
 )
 
 
@@ -26,17 +21,24 @@ from .config import (
 # CLIENTS
 # =========================================================
 
-groq_client = Groq(
-    api_key=GROQ_API_KEY
-)
-
-
+groq_client = None
 nvidia_client = None
+
+
+if GROQ_API_KEY:
+    groq_client = Groq(
+        api_key=GROQ_API_KEY,
+        timeout=AI_TIMEOUT,
+        max_retries=0,
+    )
+
 
 if NVIDIA_API_KEY:
     nvidia_client = OpenAI(
         base_url=NVIDIA_BASE_URL,
         api_key=NVIDIA_API_KEY,
+        timeout=AI_TIMEOUT,
+        max_retries=0,
     )
 
 
@@ -45,581 +47,379 @@ if NVIDIA_API_KEY:
 # =========================================================
 
 SYSTEM_PROMPT = """
-You are a technology news editor from Tamil Nadu.
+You are a technology news summarizer for an Indian Tamil-speaking audience.
 
-Your job is to summarize technology news in NATURAL INDIAN
-THANGGLISH.
+Your job is to summarize the given technology news article in natural
+Indian Thanglish.
 
-IMPORTANT:
+IMPORTANT LANGUAGE RULES:
 
-Write Tamil using ENGLISH / ROMAN letters.
+- Use Roman Tamil mixed naturally with English.
+- Do NOT use Tamil Unicode.
+- Do NOT write formal Tamil.
+- Do NOT write normal English.
+- The result should sound like a Tamil-speaking Indian explaining the
+  technology news naturally in conversation.
+- Technical terms such as AI, software, cloud, API, model, company names,
+  product names, security terms, etc. can remain in English.
+- Do not use words like "da", "dei", "bro".
+- Do not mention that you are an AI.
+- Do not mention this prompt.
+- Do not add headings.
+- Do not add bullet points.
+- Do not add emojis.
+- Do not add "why it matters".
+- Do not add opinions.
+- Do not speculate.
+- Do not invent facts.
 
-The output must sound like a Tamil-speaking Indian person
-naturally explaining the news.
+SUMMARY STYLE:
 
-DO NOT write a normal English news summary.
+- Write 3 to 4 natural sentences.
+- Keep the summary concise.
+- Cover the important facts from the article.
+- Mention the company/product/person involved.
+- Mention what happened and the important details.
+- Keep the meaning faithful to the source.
 
-DO NOT use Tamil Unicode.
+EXAMPLE STYLE:
 
-DO NOT use formal Tamil.
+"Google pudhusa oru AI agent-ai announce pannirukku, idhu families-ku
+daily activities manage panna help pannum. Indha agent ippo experimental
+stage-la irukku, melum different family tasks-ku support kudukka design
+pannirukanga. Google indha technology-ai gradual-a test panni improve
+panna plan pannirukku."
 
-DO NOT translate every English word into Tamil.
+Another example:
 
-Technical words should remain in English.
+"Amazon, Meta oda Muse AI agent-ku shopping site-la access block
+pannirukku. Muse AI agent Amazon website-la shopping related actions
+perform panna try pannadhunaala indha decision eduthirukanga. Amazon oda
+policies-ku indha agent oda interaction match aagala-nu company
+explain pannirukku."
 
-Natural examples:
-
-"Google pudhusa oru AI agent-ai announce pannirukku."
-
-"Indha vulnerability use panni attackers system-la code
-execute panna mudiyum-nu researchers kandupidichirukanga."
-
-"Amazon indha feature-ai limited users-ku release pannirukku."
-
-"Company ippo indha technology-ai test panni varudhu."
-
-"Researchers indha attack method-a identify pannirukanga."
-
-"Microsoft indha update-ai Windows users-ku gradually
-rollout panna start pannirukku."
-
-The summary should feel like a Tamil-speaking tech person
-naturally explaining the news.
-
-STYLE RULES:
-
-- Roman Tamil + English
-- Natural Indian Thanglish
-- Conversational but professional
-- Easy to understand
-- Exactly 3 or 4 sentences
-- Around 70 to 120 words
-- Use facts from the article only
-- Do not invent information
-- Do not speculate
-- Do not give personal opinions
-- Do not explain "why it matters"
-- Do not add recommendations
-- Do not add analysis
-- No bullet points
-- No headings
-- No emojis
-- No markdown
-- No quotes around the summary
-- Do not say "According to the article"
-- Do not say "This article discusses"
-- Do not say "This news is about"
-- Do not say "The article talks about"
-- Do not say "As an AI"
-- Do not say "I cannot summarize"
-
-Start directly with what happened.
-
-BAD:
-
-"This article discusses a new AI agent launched by Google."
-
-GOOD:
-
-"Google pudhusa oru AI agent-ai announce pannirukku, idhu
-families-ku daily activities manage panna help pannum."
-
-BAD:
-
-"Amazon has blocked Meta's Muse AI from shopping on its website."
-
-GOOD:
-
-"Amazon, Meta oda Muse AI agent-ku shopping site-la access
-block pannirukku."
-
-Return ONLY the final Thanglish summary.
+Return ONLY the summary.
 """
 
 
 # =========================================================
-# CLEAN SUMMARY
+# VALIDATION
 # =========================================================
 
-def clean_summary(summary):
+def validate_summary(summary: str) -> bool:
+    """
+    Basic validation to make sure the model actually returned
+    a usable Thanglish summary.
+    """
+
+    if not summary:
+        return False
+
+    summary = summary.strip()
+
+    if len(summary) < 80:
+        return False
+
+    if len(summary) > MAX_SUMMARY_CHARS:
+        return False
+
+    # Reject obvious formatting
+    forbidden_patterns = [
+        "```",
+        "why it matters",
+        "key points",
+        "summary:",
+        "here is the summary",
+        "as an ai",
+        "i cannot",
+        "i'm unable",
+    ]
+
+    lower_summary = summary.lower()
+
+    for pattern in forbidden_patterns:
+        if pattern in lower_summary:
+            return False
+
+    # We expect some Tamil/Indian transliterated words.
+    # This is intentionally loose so genuine English technical terms
+    # don't cause rejection.
+    thanglish_markers = [
+        "irukku",
+        "irukkum",
+        "pannirukku",
+        "pannanga",
+        "pannirukanga",
+        "nu",
+        "oda",
+        "la",
+        "ku",
+        "aga",
+        "aana",
+        "idhu",
+        "indha",
+        "oru",
+        "melum",
+        "vandhu",
+        "seidh",
+        "seyy",
+        "kudukka",
+        "kudukkum",
+        "use",
+        "panna",
+    ]
+
+    marker_found = any(
+        marker in lower_summary
+        for marker in thanglish_markers
+    )
+
+    if not marker_found:
+        return False
+
+    return True
+
+
+# =========================================================
+# CLEAN RESPONSE
+# =========================================================
+
+def clean_summary(summary: str) -> str:
+    """
+    Clean unnecessary whitespace and quotes.
+    """
 
     if not summary:
         return ""
 
     summary = summary.strip()
 
-    # Remove code fences
-    summary = re.sub(
-        r"^```(?:text)?\s*",
-        "",
-        summary,
-        flags=re.IGNORECASE,
-    )
+    # Remove accidental surrounding quotes
+    if (
+        len(summary) >= 2
+        and summary.startswith('"')
+        and summary.endswith('"')
+    ):
+        summary = summary[1:-1].strip()
 
-    summary = re.sub(
-        r"\s*```$",
-        "",
-        summary,
-        flags=re.IGNORECASE,
-    )
+    # Normalize excessive whitespace
+    summary = " ".join(summary.split())
 
-    # Remove accidental prefixes
-    prefixes = [
-        "Summary:",
-        "SUMMARY:",
-        "Thanglish Summary:",
-        "Thanglish summary:",
-        "Final Summary:",
-        "Final summary:",
-    ]
-
-    for prefix in prefixes:
-
-        if summary.startswith(prefix):
-            summary = summary[
-                len(prefix):
-            ].strip()
-
-    # Remove surrounding quotes
-    summary = (
-        summary
-        .strip('"')
-        .strip("'")
-        .strip()
-    )
-
-    # Normalize whitespace
-    summary = re.sub(
-        r"\s+",
-        " ",
-        summary,
-    )
-
-    return summary.strip()
+    return summary
 
 
 # =========================================================
-# VALIDATE THANGGLISH
+# GROQ CALL
 # =========================================================
 
-def validate_summary(summary):
+def summarize_with_groq(
+    model: str,
+    title: str,
+    content: str,
+) -> str:
 
-    if not summary:
-        return False
-
-    summary = clean_summary(summary)
-
-    # Minimum length
-    if len(summary) < 180:
-        return False
-
-    # Maximum length
-    if len(summary) > MAX_SUMMARY_CHARS:
-        return False
-
-    lowered = summary.lower()
-
-    invalid_phrases = [
-
-        # AI meta
-        "as an ai",
-        "as a language model",
-
-        # Failure responses
-        "unable to summarize",
-        "cannot summarize",
-        "can't summarize",
-        "i cannot",
-        "i can't",
-
-        # English article openings
-        "this article",
-        "this news is about",
-        "the article discusses",
-        "the article talks about",
-        "according to the article",
-
-        # Unwanted casual words
-        "da bro",
-        "dei",
-    ]
-
-    for phrase in invalid_phrases:
-
-        if phrase in lowered:
-            return False
-
-    return True
-
-
-# =========================================================
-# LIMIT SUMMARY
-# =========================================================
-
-def limit_summary(summary):
-
-    summary = clean_summary(summary)
-
-    if len(summary) <= MAX_SUMMARY_CHARS:
-        return summary
-
-    shortened = summary[
-        :MAX_SUMMARY_CHARS
-    ]
-
-    shortened = shortened.rsplit(
-        " ",
-        1,
-    )[0]
-
-    return shortened + "..."
-
-
-# =========================================================
-# GROQ SUMMARY
-# =========================================================
-
-def generate_groq_summary(
-    model,
-    title,
-    content,
-):
-
-    prompt = f"""
-Summarize the following technology news.
-
-Write ONLY natural Indian Thanglish.
-
-Tamil must be written using English/Roman letters.
-
-Exactly 3 or 4 sentences.
-
-Do NOT write normal English.
-
-Use natural Tamil sentence structure mixed with English.
-
-Start directly with what happened.
-
-Use only information present in the article.
-
-Article title:
-
-{title}
-
-Article content:
-
-{content}
-
-Return ONLY the final Thanglish summary.
-"""
-
-    request_args = {
-
-        "model": model,
-
-        "messages": [
-
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
-
-            {
-                "role": "user",
-                "content": prompt,
-            },
-
-        ],
-
-        "temperature": GROQ_TEMPERATURE,
-
-        "max_tokens": GROQ_MAX_TOKENS,
-    }
-
-
-    # Qwen → disable reasoning
-    if model == GROQ_PRIMARY_MODEL:
-
-        request_args[
-            "reasoning_effort"
-        ] = "none"
-
-
-    # GPT-OSS → disable reasoning
-    elif model.startswith("openai/"):
-
-        request_args[
-            "include_reasoning"
-        ] = False
-
+    if not groq_client:
+        raise RuntimeError("GROQ_API_KEY is not configured")
 
     response = groq_client.chat.completions.create(
-        **request_args
-    )
-
-    return response.choices[0].message.content
-
-
-# =========================================================
-# NVIDIA SUMMARY
-# =========================================================
-
-def generate_nvidia_summary(
-    title,
-    content,
-):
-
-    if not nvidia_client:
-
-        raise RuntimeError(
-            "NVIDIA_API_KEY is not configured"
-        )
-
-
-    prompt = f"""
-Summarize the following technology news in natural Indian
-Thanglish.
-
-Tamil must be written using English/Roman letters.
-
-The output should sound like a Tamil-speaking Indian tech
-person naturally explaining the news.
-
-Use natural Tamil sentence structure mixed with English.
-
-Do NOT produce normal English.
-
-Do NOT use Tamil Unicode.
-
-Do NOT use formal Tamil.
-
-Exactly 3 or 4 sentences.
-
-Around 70 to 120 words.
-
-Use only facts present in the article.
-
-No opinions.
-
-No speculation.
-
-No analysis.
-
-No "why it matters".
-
-No headings.
-
-No bullets.
-
-No emojis.
-
-Start directly with what happened.
-
-Article title:
-
-{title}
-
-Article content:
-
-{content}
-
-Return ONLY the final Thanglish summary.
-"""
-
-
-    response = nvidia_client.chat.completions.create(
-
-        model=NVIDIA_MODEL,
-
+        model=model,
         messages=[
-
             {
                 "role": "system",
                 "content": SYSTEM_PROMPT,
             },
-
             {
                 "role": "user",
-                "content": prompt,
+                "content": (
+                    f"Article title:\n{title}\n\n"
+                    f"Article content:\n{content}"
+                ),
             },
-
         ],
+        temperature=GROQ_TEMPERATURE,
+        max_tokens=GROQ_MAX_TOKENS,
+    )
 
+    if not response.choices:
+        raise RuntimeError("Groq returned no choices")
+
+    summary = response.choices[0].message.content
+
+    if not summary:
+        raise RuntimeError("Groq returned empty content")
+
+    return clean_summary(summary)
+
+
+# =========================================================
+# NVIDIA CALL
+# =========================================================
+
+def summarize_with_nvidia(
+    title: str,
+    content: str,
+) -> str:
+
+    if not nvidia_client:
+        raise RuntimeError("NVIDIA_API_KEY is not configured")
+
+    response = nvidia_client.chat.completions.create(
+        model=NVIDIA_MODEL,
+        messages=[
+            {
+                "role": "system",
+                "content": SYSTEM_PROMPT,
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"Article title:\n{title}\n\n"
+                    f"Article content:\n{content}"
+                ),
+            },
+        ],
         temperature=NVIDIA_TEMPERATURE,
-
         max_tokens=NVIDIA_MAX_TOKENS,
     )
 
+    if not response.choices:
+        raise RuntimeError("NVIDIA returned no choices")
 
-    return response.choices[0].message.content
+    summary = response.choices[0].message.content
+
+    if not summary:
+        raise RuntimeError("NVIDIA returned empty content")
+
+    return clean_summary(summary)
 
 
 # =========================================================
 # MAIN SUMMARIZER
 # =========================================================
 
-def summarize_article(article):
+def summarize_article(article) -> str:
+    """
+    Try multiple AI providers/models in fallback order.
 
-    title = article.get(
-        "title",
-        "",
-    )
+    Order:
 
-    content = article.get(
-        "content",
-        "",
-    )
+    1. Groq Qwen
+    2. NVIDIA
+    3. Groq GPT-OSS 120B
+    4. Groq GPT-OSS 20B
+    """
 
+    title = article.get("title", "").strip()
+
+    content = (
+        article.get("content")
+        or article.get("description")
+        or ""
+    ).strip()
+
+    if not title:
+        print("  ✗ Missing article title")
+        return ""
 
     if not content:
+        print("  ✗ Missing article content")
+        return ""
 
-        print(
-            "  ✗ No article content"
-        )
-
-        return None
-
+    # Keep request size under control
+    content = content[:12000]
 
     # =====================================================
-    # 1. GROQ PRIMARY
+    # 1. GROQ PRIMARY — QWEN
     # =====================================================
 
-    groq_models = [
-        GROQ_PRIMARY_MODEL,
-        *GROQ_FALLBACK_MODELS,
-    ]
+    if groq_client:
 
-
-    # =====================================================
-    # 2. TRY GROQ PRIMARY + FALLBACKS
-    # =====================================================
-
-    for model in groq_models:
+        print(f"  → Trying Groq: {GROQ_PRIMARY_MODEL}")
 
         try:
-
-            print(
-                f"  → Trying Groq: {model}"
-            )
-
-
-            raw = generate_groq_summary(
-                model,
+            summary = summarize_with_groq(
+                GROQ_PRIMARY_MODEL,
                 title,
                 content,
             )
 
+            if validate_summary(summary):
+                print("  ✓ Qwen summary generated")
+                return summary
 
-            if not raw:
-
-                print(
-                    f"  ✗ {model}: empty response"
-                )
-
-                continue
-
-
-            summary = clean_summary(
-                raw
-            )
-
-
-            if not validate_summary(
-                summary
-            ):
-
-                print(
-                    f"  ✗ {model}: invalid Thanglish"
-                )
-
-                continue
-
-
-            summary = limit_summary(
-                summary
-            )
-
-
-            print(
-                f"  ✓ Groq success: {model}"
-            )
-
-            return summary
-
+            print("  ✗ Qwen returned invalid summary")
 
         except Exception as error:
 
             print(
-                f"  ✗ {model}: {error}"
+                f"  ✗ {GROQ_PRIMARY_MODEL}: "
+                f"{type(error).__name__}: {error!r}"
             )
 
-
     # =====================================================
-    # 3. NVIDIA FALLBACK
+    # 2. NVIDIA
     # =====================================================
 
     if nvidia_client:
 
+        print(f"  → Trying NVIDIA: {NVIDIA_MODEL}")
+
         try:
-
-            print(
-                f"  → Trying NVIDIA: {NVIDIA_MODEL}"
-            )
-
-
-            raw = generate_nvidia_summary(
+            summary = summarize_with_nvidia(
                 title,
                 content,
             )
 
+            if validate_summary(summary):
+                print("  ✓ NVIDIA summary generated")
+                return summary
 
-            if not raw:
-
-                print(
-                    "  ✗ NVIDIA: empty response"
-                )
-
-            else:
-
-                summary = clean_summary(
-                    raw
-                )
-
-
-                if validate_summary(
-                    summary
-                ):
-
-                    summary = limit_summary(
-                        summary
-                    )
-
-
-                    print(
-                        "  ✓ NVIDIA fallback success"
-                    )
-
-                    return summary
-
-
-                print(
-                    "  ✗ NVIDIA: invalid Thanglish"
-                )
-
+            print("  ✗ NVIDIA returned invalid summary")
 
         except Exception as error:
 
             print(
-                f"  ✗ NVIDIA: {error}"
+                f"  ✗ NVIDIA: "
+                f"{type(error).__name__}: {error!r}"
             )
 
+    # =====================================================
+    # 3 + 4. GROQ FALLBACK MODELS
+    # =====================================================
+
+    if groq_client:
+
+        for model in GROQ_FALLBACK_MODELS:
+
+            print(f"  → Trying Groq: {model}")
+
+            try:
+
+                summary = summarize_with_groq(
+                    model,
+                    title,
+                    content,
+                )
+
+                if validate_summary(summary):
+                    print(f"  ✓ {model} summary generated")
+                    return summary
+
+                print(
+                    f"  ✗ {model} returned invalid summary"
+                )
+
+            except Exception as error:
+
+                print(
+                    f"  ✗ {model}: "
+                    f"{type(error).__name__}: {error!r}"
+                )
 
     # =====================================================
-    # 4. EVERYTHING FAILED
+    # ALL FAILED
     # =====================================================
 
-    print(
-        "  ✗ All summarization models failed"
-    )
+    print("  ✗ All summarization models failed")
 
-    return None
+    return ""
