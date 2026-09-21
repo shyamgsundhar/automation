@@ -4,23 +4,205 @@ on:
   schedule:
     - cron: "30 0 * * *"
     - cron: "30 12 * * *"
+
   workflow_dispatch:
 
+
 jobs:
-  run-bot:
+
+  run-tech-news-bot:
+
     runs-on: ubuntu-latest
 
     steps:
+
+      # =====================================================
+      # CHECKOUT
+      # =====================================================
+
       - name: Checkout repository
         uses: actions/checkout@v4
+
+
+      # =====================================================
+      # PYTHON
+      # =====================================================
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.14"
 
+
+      # =====================================================
+      # INSTALL DEPENDENCIES
+      # =====================================================
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+
+      # =====================================================
+      # TEST AI API CONNECTIVITY
+      # =====================================================
+
+      - name: Test AI API connectivity
+        env:
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+
+        run: |
+
+          python - <<'PY'
+
+          import os
+          import urllib.request
+          import urllib.error
+
+
+          # =================================================
+          # GROQ
+          # =================================================
+
+          print("")
+          print("=" * 60)
+          print("TESTING GROQ API")
+          print("=" * 60)
+
+          groq_key = os.environ.get("GROQ_API_KEY")
+
+          if not groq_key:
+              print("✗ GROQ_API_KEY is missing")
+          else:
+
+              try:
+
+                  request = urllib.request.Request(
+                      "https://api.groq.com/openai/v1/models",
+                      headers={
+                          "Authorization": f"Bearer {groq_key}"
+                      }
+                  )
+
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=20
+                  ) as response:
+
+                      print(
+                          "✓ Groq reachable"
+                      )
+
+                      print(
+                          "Status:",
+                          response.status
+                      )
+
+              except urllib.error.HTTPError as error:
+
+                  print(
+                      "✗ Groq HTTP error:",
+                      error.code,
+                      error.reason
+                  )
+
+              except urllib.error.URLError as error:
+
+                  print(
+                      "✗ Groq URL/network error:",
+                      repr(error)
+                  )
+
+              except Exception as error:
+
+                  print(
+                      "✗ Groq unexpected error:",
+                      type(error).__name__,
+                      repr(error)
+                  )
+
+
+          # =================================================
+          # NVIDIA
+          # =================================================
+
+          print("")
+          print("=" * 60)
+          print("TESTING NVIDIA API")
+          print("=" * 60)
+
+          nvidia_key = os.environ.get("NVIDIA_API_KEY")
+
+          if not nvidia_key:
+              print("✗ NVIDIA_API_KEY is missing")
+          else:
+
+              try:
+
+                  request = urllib.request.Request(
+                      "https://integrate.api.nvidia.com/v1/models",
+                      headers={
+                          "Authorization": f"Bearer {nvidia_key}"
+                      }
+                  )
+
+                  with urllib.request.urlopen(
+                      request,
+                      timeout=20
+                  ) as response:
+
+                      print(
+                          "✓ NVIDIA reachable"
+                      )
+
+                      print(
+                          "Status:",
+                          response.status
+                      )
+
+              except urllib.error.HTTPError as error:
+
+                  print(
+                      "✗ NVIDIA HTTP error:",
+                      error.code,
+                      error.reason
+                  )
+
+              except urllib.error.URLError as error:
+
+                  print(
+                      "✗ NVIDIA URL/network error:",
+                      repr(error)
+                  )
+
+              except Exception as error:
+
+                  print(
+                      "✗ NVIDIA URL/network error:",
+                      repr(error)
+                  )
+
+              except Exception as error:
+
+                  print(
+                      "✗ NVIDIA unexpected error:",
+                      type(error).__name__,
+                      repr(error)
+                  )
+
+          print("")
+          print("=" * 60)
+          print("AI CONNECTIVITY TEST COMPLETED")
+          print("=" * 60)
+
+          PY
+
+
+      # =====================================================
+      # RUN BOT
+      # =====================================================
 
       - name: Run Tech News Bot
         env:
@@ -28,4 +210,6 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
-        run: python -m app.main
+
+        run: |
+          python -m app.main
