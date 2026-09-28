@@ -24,6 +24,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 
 REQUEST_TIMEOUT = 20
 
+AI_TIMEOUT = 60
+
 
 # =========================================================
 # ARTICLE SETTINGS
