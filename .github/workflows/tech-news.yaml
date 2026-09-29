@@ -38,7 +38,7 @@ jobs:
           pip install -r requirements.txt
 
       # =====================================================
-      # VALIDATE API KEY FORMATTING
+      # VALIDATE AND NORMALIZE API KEYS
       # =====================================================
 
       - name: Validate API Key Formatting
@@ -48,27 +48,27 @@ jobs:
         run: |
           python - <<'PY'
           import os
+          import sys
 
           for name in ("GROQ_API_KEY", "NVIDIA_API_KEY"):
               value = os.environ.get(name, "")
 
-              invalid = [
-                  (i, ord(ch))
-                  for i, ch in enumerate(value)
-                  if ch.isspace() or ord(ch) < 32 or ord(ch) == 127
-              ]
-
-              print(f"{name}: configured={bool(value)}, length={len(value)}")
-              print(f"{name}: invalid whitespace/control positions={invalid}")
-
               if not value:
-                  raise SystemExit(f"{name} is missing!")
+                  print(f"FAIL: {name} is missing.")
+                  sys.exit(1)
 
-              if invalid:
-                  raise SystemExit(
-                      f"{name} contains whitespace/control characters. "
-                      "Please re-enter the GitHub secret."
-                  )
+              # Remove accidental leading/trailing whitespace only.
+              cleaned = value.strip()
+
+              # Reject whitespace/control characters inside the key.
+              if any(
+                  ch.isspace() or ord(ch) < 32 or ord(ch) == 127
+                  for ch in cleaned
+              ):
+                  print(f"FAIL: {name} contains internal whitespace/control characters.")
+                  sys.exit(1)
+
+              print(f"{name}: configured; formatting check passed.")
 
           print("API key formatting validation passed.")
           PY
@@ -92,7 +92,7 @@ jobs:
           print("GROQ API CONNECTION DIAGNOSTIC")
           print("=" * 55)
 
-          api_key = os.environ.get("GROQ_API_KEY")
+          api_key = os.environ.get("GROQ_API_KEY", "").strip()
 
           if not api_key:
               print("FAIL: GROQ_API_KEY is missing")
@@ -117,22 +117,26 @@ jobs:
                   print("HTTP status:", response.status)
 
           except urllib.error.HTTPError as error:
-              print("HTTPS connection: SUCCESS")
+              print("HTTPS connection reached the server.")
               print("HTTP status:", error.code)
               print("Response reason:", error.reason)
 
           except urllib.error.URLError as error:
               print("HTTPS connection: FAILED")
               print("Reason:", repr(error.reason))
+              raise
 
           except ssl.SSLError as error:
               print("TLS/SSL error:", repr(error))
+              raise
 
           except socket.gaierror as error:
               print("DNS resolution error:", repr(error))
+              raise
 
           except TimeoutError as error:
               print("Connection timed out:", repr(error))
+              raise
 
           except Exception as error:
               print("Unexpected error:", type(error).__name__, repr(error))
@@ -160,7 +164,7 @@ jobs:
           print("NVIDIA API CONNECTION DIAGNOSTIC")
           print("=" * 55)
 
-          api_key = os.environ.get("NVIDIA_API_KEY")
+          api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
 
           if not api_key:
               print("FAIL: NVIDIA_API_KEY is missing")
@@ -185,22 +189,26 @@ jobs:
                   print("HTTP status:", response.status)
 
           except urllib.error.HTTPError as error:
-              print("HTTPS connection: SUCCESS")
+              print("HTTPS connection reached the server.")
               print("HTTP status:", error.code)
               print("Response reason:", error.reason)
 
           except urllib.error.URLError as error:
               print("HTTPS connection: FAILED")
               print("Reason:", repr(error.reason))
+              raise
 
           except ssl.SSLError as error:
               print("TLS/SSL error:", repr(error))
+              raise
 
           except socket.gaierror as error:
               print("DNS resolution error:", repr(error))
+              raise
 
           except TimeoutError as error:
               print("Connection timed out:", repr(error))
+              raise
 
           except Exception as error:
               print("Unexpected error:", type(error).__name__, repr(error))
@@ -221,4 +229,8 @@ jobs:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
 
         run: |
+          # Normalize trailing newline/whitespace in API key secrets.
+          export GROQ_API_KEY="$(printf '%s' "$GROQ_API_KEY" | tr -d '\r\n' | xargs)"
+          export NVIDIA_API_KEY="$(printf '%s' "$NVIDIA_API_KEY" | tr -d '\r\n' | xargs)"
+
           python -m app.main
